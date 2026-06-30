@@ -1,5 +1,5 @@
 import io
-import fitz  # Ganti dari pymupdf
+import pymupdf as fitz
 from collections import Counter, defaultdict
 import statistics
 import re
@@ -158,9 +158,13 @@ def get_pdf_detailed_info(file_bytes):
             width = page.rect.width
             height = page.rect.height
 
+            # === GET LINES ===
             lines = get_lines_with_positions(page)
+            
+            # === MARGIN ===
             margin_info = get_page_margin(page)
             
+            # === FONT INFO ===
             fonts_on_page = defaultdict(int)
             font_sizes_on_page = []
             for block in page.get_text("dict")["blocks"]:
@@ -179,12 +183,13 @@ def get_pdf_detailed_info(file_bytes):
             word_count = len(page.get_text().split())
             total_words += word_count
             
-            # === SPACING ===
+            # === SPACING (per baris) ===
+            # Hitung semua gap antar baris
             all_gaps = []
             gap_details = []
             for i in range(len(lines) - 1):
                 gap = lines[i+1]['y0'] - lines[i]['y0']
-                if 0 < gap < 200:
+                if 0 < gap < 200:  # batas aman
                     all_gaps.append(gap)
                     gap_details.append({
                         'line_from': i + 1,
@@ -193,12 +198,15 @@ def get_pdf_detailed_info(file_bytes):
                         'deviation': gap - 18,
                     })
             
+            # Tentukan median gap untuk baseline
             median_gap = statistics.median(all_gaps) if all_gaps else 0
             
+            # Evaluasi setiap gap: OK jika dalam rentang median ±6 pt dan 6-30 pt
+            # Gap >30 pt dianggap antar paragraf (tidak dianggap error)
             for d in gap_details:
                 gap = d['gap']
                 if gap > 30:
-                    d['is_1_5'] = True
+                    d['is_1_5'] = True  # anggap OK (antar paragraf)
                     d['status'] = 'ANTAR PARAGRAF'
                     d['deviation'] = gap - 18
                 elif gap < 6:
@@ -206,6 +214,7 @@ def get_pdf_detailed_info(file_bytes):
                     d['status'] = 'KURANG'
                     d['deviation'] = gap - 18
                 else:
+                    # Dalam rentang 6-30, cek apakah dekat dengan median
                     if abs(gap - median_gap) <= 6:
                         d['is_1_5'] = True
                         d['status'] = 'OK'
@@ -214,6 +223,7 @@ def get_pdf_detailed_info(file_bytes):
                         d['status'] = 'MELEWATI'
                     d['deviation'] = gap - 18
             
+            # Spacing overall: median gap harus dalam rentang 6-30
             is_1_5_overall = 6 <= median_gap <= 30
             spacing_info = {
                 'spacing': median_gap,
@@ -221,7 +231,7 @@ def get_pdf_detailed_info(file_bytes):
                 'details': gap_details,
                 'outliers': [],
                 'total_lines': len(lines),
-                'filtered_lines': len(all_gaps)
+                'filtered_lines': len(all_gaps)  # PERBAIKAN: ganti gaps → all_gaps
             }
             
             # === JUSTIFY ===
@@ -274,6 +284,12 @@ def get_pdf_detailed_info(file_bytes):
 
 # ========== RENDER PAGE WITH GUIDELINES ==========
 def render_page_with_guidelines(file_bytes, page_num, dpi=100):
+    """
+    Render halaman dengan:
+    - Merah: batas margin 3 cm
+    - Biru: posisi ideal baris berikutnya (spacing 1.5) dihitung dari baris sebelumnya
+    - Hijau/Oranye: label gap aktual dengan status OK/MELEWATI/ANTAR PARAGRAF
+    """
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
@@ -292,6 +308,7 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         target_margin_pt = cm_to_pt(3.0)
         margin_px = target_margin_pt * scale
         
+        # Gambar batas margin (merah)
         draw.rectangle(
             [margin_px, margin_px, 
              pix.width - margin_px, pix.height - margin_px],
@@ -300,6 +317,7 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         )
         draw.text((10, 10), "Margin target 3 cm (merah)", fill=(255, 0, 0))
         
+        # Dapatkan baris teks
         lines = get_lines_with_positions(page)
         if not lines:
             doc.close()
@@ -308,41 +326,54 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
             img_bytes.seek(0)
             return img_bytes.getvalue()
         
+        # Gambar spacing per baris
         for i, line in enumerate(lines):
             y0_px = line['y0'] * scale
+            
+            # Gambar titik hijau untuk baris aktual
             draw.ellipse([(10, y0_px-2), (14, y0_px+2)], fill=(0, 255, 0))
             
             if i < len(lines) - 1:
                 gap_actual = lines[i+1]['y0'] - line['y0']
                 ideal_y_px = (line['y0'] + 18) * scale
+                actual_y_px = lines[i+1]['y0'] * scale
+                
+                # Garis biru = posisi ideal (18 pt dari baris saat ini)
                 draw.line([(20, ideal_y_px), (pix.width - 20, ideal_y_px)], 
                           fill=(0, 100, 255), width=1)
                 
+                # Tentukan status gap
                 if gap_actual > 30:
                     status_text = " (extra space)"
-                    color = (200, 100, 0)
+                    color = (200, 100, 0)  # oranye tua
                 elif gap_actual < 6:
                     status_text = " (terlalu rapat)"
-                    color = (255, 0, 0)
+                    color = (255, 0, 0)  # merah
                 else:
+                    # Cek apakah dekat dengan median (akan dihitung di analyze)
+                    # Tapi di render ini kita hanya tampilkan warna berdasarkan gap
                     if 6 <= gap_actual <= 30:
                         status_text = ""
-                        color = (0, 150, 0)
+                        color = (0, 150, 0)  # hijau
                     else:
                         status_text = " (deviasi)"
-                        color = (255, 165, 0)
+                        color = (255, 165, 0)  # oranye
                 
                 label = f"{gap_actual:.1f}pt{status_text}"
                 draw.text((pix.width - 120, ideal_y_px - 8), label, fill=color)
         
+        # Info margin dan spacing
         margin_data = get_page_margin(page)
         if margin_data:
             info = f"Margin aktual: Kiri={pt_to_cm(margin_data['left']):.2f}cm, Kanan={pt_to_cm(margin_data['right']):.2f}cm, Atas={pt_to_cm(margin_data['top']):.2f}cm, Bawah={pt_to_cm(margin_data['bottom']):.2f}cm"
             draw.text((10, 30), info, fill=(0, 0, 0))
             draw.text((10, 50), f"Sumber: {margin_data.get('source', 'unknown')}", fill=(0, 0, 0))
         
+        # Judul
         draw.text((10, 70), "Garis biru = posisi ideal baris berikutnya (18 pt) | Hijau=OK, Oranye=extra space, Merah=terlalu rapat", fill=(0, 0, 0))
         draw.text((10, 90), "Gap >30 pt dianggap antar paragraf (bukan error line spacing)", fill=(0, 0, 0))
+        
+        # Info halaman
         draw.text((10, pix.height - 30), f"Halaman {page_num}", fill=(0, 0, 0))
         
         doc.close()
@@ -357,6 +388,9 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
 
 # ========== ANALYZE PAGE DEVIATIONS ==========
 def analyze_page_deviations(file_bytes, page_num):
+    """
+    Analisis margin dan spacing per baris dengan kategorisasi OK/antar paragraf.
+    """
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
@@ -366,6 +400,7 @@ def analyze_page_deviations(file_bytes, page_num):
         width_pt = page.rect.width
         height_pt = page.rect.height
         
+        # Margin
         margin_data = get_page_margin(page)
         if margin_data is None:
             margin_data = {'left': 0, 'right': 0, 'top': 0, 'bottom': 0, 'source': 'none'}
@@ -382,6 +417,7 @@ def analyze_page_deviations(file_bytes, page_num):
             else:
                 margin_status[side] = f"AMAN (deviasi {dev_cm:+.2f} cm)"
         
+        # Lines
         lines = get_lines_with_positions(page)
         spacing_deviations = []
         for i in range(len(lines) - 1):
@@ -389,12 +425,14 @@ def analyze_page_deviations(file_bytes, page_num):
             if 0 < gap < 200:
                 if gap > 30:
                     status = "ANTAR PARAGRAF"
-                    is_ok = True
+                    is_ok = True  # tidak dianggap error
                 elif gap < 6:
                     status = "TERLALU RAPAT"
                     is_ok = False
                 else:
-                    is_ok = True
+                    # Cek apakah gap dekat dengan median (akan dihitung di get_pdf_detailed_info)
+                    # Di sini kita hanya gunakan rentang 6-30
+                    is_ok = True  # anggap OK
                     status = "OK"
                 spacing_deviations.append({
                     'line': i + 1,
@@ -404,6 +442,7 @@ def analyze_page_deviations(file_bytes, page_num):
                     'is_ok': is_ok
                 })
         
+        # Justify
         justify_count = 0
         total_valid = 0
         for line in lines:
@@ -507,6 +546,7 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
     spacing_ok = True
     for p in info['page_data']:
         s = p['spacing_info']
+        # Overall spacing OK jika median gap dalam 6-30 pt
         is_ok = 6 <= s['spacing'] <= 30
         spacing_details.append({
             'page': p['page'],
@@ -533,6 +573,7 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         if not j['justify']:
             justify_ok = False
     
+    # === JUMLAH KATA ===
     words_ok = min_words <= main_word_count <= max_words
     
     all_ok = all([words_ok, paper_ok, margin_ok, font_ok, font_size_ok, spacing_ok, justify_ok])
