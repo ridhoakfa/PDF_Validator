@@ -1,5 +1,5 @@
 import io
-import pymupdf as fitz
+import fitz
 from collections import Counter, defaultdict
 import statistics
 import re
