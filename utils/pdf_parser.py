@@ -231,24 +231,36 @@ def get_pdf_detailed_info(file_bytes):
                 'details': gap_details,
                 'outliers': [],
                 'total_lines': len(lines),
-                'filtered_lines': len(all_gaps)  # PERBAIKAN: ganti gaps → all_gaps
+                'filtered_lines': len(all_gaps)
             }
             
-            # === JUSTIFY ===
+            # === JUSTIFY (PERBAIKAN) ===
+            # Ambil margin kiri dan kanan dari halaman
+            left_margin = margin_info['left']
+            right_margin = margin_info['right']
+            effective_width = width - left_margin - right_margin
+            tolerance = 5  # poin, toleransi untuk selisih dengan margin kanan
+            
             justify_lines = 0
-            total_lines = len(lines)
+            total_lines_valid = 0
             for line in lines:
+                # Abaikan baris yang terlalu pendek (misal < 3 kata)
+                if len(line['words']) < 3:
+                    continue
+                total_lines_valid += 1
                 line_width = line['x1'] - line['x0']
-                left_margin = line['x0']
-                right_margin = width - line['x1']
-                effective_width = width - left_margin - right_margin
-                if effective_width > 0 and line_width > 0.80 * effective_width:
+                # Syarat justify:
+                # 1. lebar baris mendekati lebar efektif (minimal 80%)
+                # 2. ujung kanan baris dekat dengan margin kanan (dalam toleransi)
+                if (line_width > 0.80 * effective_width and
+                    abs(line['x1'] - (width - right_margin)) <= tolerance):
                     justify_lines += 1
-            percentage = (justify_lines / total_lines * 100) if total_lines > 0 else 0
+            
+            percentage = (justify_lines / total_lines_valid * 100) if total_lines_valid > 0 else 0
             justify_info = {
                 'justify': percentage >= 40,
                 'percentage': round(percentage, 1),
-                'total_lines': total_lines,
+                'total_lines': total_lines_valid,
                 'justify_lines': justify_lines
             }
             
@@ -442,19 +454,23 @@ def analyze_page_deviations(file_bytes, page_num):
                     'is_ok': is_ok
                 })
         
-        # Justify
+        # === JUSTIFY (PERBAIKAN) ===
+        left_margin = margin_data['left']
+        right_margin = margin_data['right']
+        effective_width = width_pt - left_margin - right_margin
+        tolerance = 5  # poin
+        
         justify_count = 0
         total_valid = 0
         for line in lines:
             if len(line['words']) < 3:
                 continue
-            line_width = line['x1'] - line['x0']
-            left_margin = line['x0']
-            right_margin = width_pt - line['x1']
-            effective_width = width_pt - left_margin - right_margin
-            if effective_width > 0 and line_width > 0.80 * effective_width:
-                justify_count += 1
             total_valid += 1
+            line_width = line['x1'] - line['x0']
+            if (line_width > 0.80 * effective_width and
+                abs(line['x1'] - (width_pt - right_margin)) <= tolerance):
+                justify_count += 1
+        
         justify_percentage = (justify_count / total_valid * 100) if total_valid > 0 else 0
         justify_ok = justify_percentage >= 40
         
@@ -600,3 +616,4 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         'bibliography_detected': detect_bibliography(text) is not None,
         'all_ok': all_ok
     }
+
