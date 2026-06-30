@@ -257,6 +257,26 @@ if uploaded_file:
                 st.write("✅ Semua gap OK.")
             st.markdown("---")
     
+    # ========== JUSTIFY DETAIL (TAMBAHAN) ==========
+    with st.expander("📄 Detail Perataan (Justify) per Halaman", expanded=False):
+        # Hitung rata-rata persentase justify seluruh halaman
+        avg_justify = sum(j['percentage'] for j in result['justify_details']) / len(result['justify_details']) if result['justify_details'] else 0
+        st.write(f"**Rata-rata persentase justify seluruh dokumen:** {avg_justify:.1f}%")
+        justify_rows = []
+        for j in result['justify_details']:
+            justify_rows.append({
+                'Halaman': j['page'],
+                'Justify': "✅" if j['justify'] else "❌",
+                'Persentase': f"{j['percentage']:.1f}%",
+                'Baris Justify': j['justify_lines'],
+                'Total Baris (valid)': j['total_lines'],
+                'Status': "OK" if j['justify'] else "Tidak OK"
+            })
+        df_justify = pd.DataFrame(justify_rows)
+        st.dataframe(df_justify, use_container_width=True, height=200)
+        if not result['justify_ok']:
+            st.warning("Beberapa halaman memiliki persentase justify di bawah 40%. Periksa tabel.")
+    
     # ========== FOOTER ==========
     st.markdown("---")
     st.caption("🔍 Validator Format Dokumen – Dibuat oleh Ridho Akbar Fadhilah (24050123130116) | Statistika Universitas Diponegoro")
