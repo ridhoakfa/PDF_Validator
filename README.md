@@ -1,24 +1,24 @@
 # 📄 Validator Format Dokumen Laporan
 
-Aplikasi berbasis **Streamlit** untuk memvalidasi format dokumen laporan (PDF) sesuai dengan standar penulisan akademik. Membantu penulis memeriksa kesesuaian font, margin, jumlah kata, perataan, dan spasi secara otomatis.
+Aplikasi berbasis **Streamlit** untuk memvalidasi format dokumen laporan (PDF) secara otomatis sesuai standar penulisan akademik. Membantu penulis memeriksa kesesuaian font, margin, jumlah kata, perataan, dan spasi secara detail per halaman.
 
 ---
 
-## 🔍 Fitur
+## 🔍 Fitur Utama
 
-| Fitur | Deskripsi |
-|-------|-----------|
-| **Font** | Memastikan semua teks menggunakan Times New Roman (per halaman) |
-| **Ukuran Font** | Memeriksa apakah ukuran font dominan 12 pt |
-| **Margin** | Mengukur margin atas, bawah, kiri, kanan (target 3 cm) |
-| **Jumlah Kata** | Menghitung total kata di luar daftar pustaka (target 2000–3000) |
-| **Perataan** | Mendeteksi apakah teks rata kanan-kiri (justify) per halaman |
-| **Spasi Baris** | Memeriksa apakah spasi sesuai 1.5 (≈18 pt) |
-| **Ukuran Kertas** | Validasi ukuran kertas A4 |
+| Fitur | Deskripsi | Target |
+|-------|-----------|--------|
+| **🔤 Font** | Memeriksa apakah semua teks menggunakan Times New Roman | Times New Roman |
+| **📏 Ukuran Font** | Rata-rata ukuran font dominan | 12 pt (±1 pt) |
+| **📐 Margin** | Mengukur margin atas, bawah, kiri, kanan | 3 cm (±0.2 cm) |
+| **📝 Jumlah Kata** | Menghitung kata di luar daftar pustaka | 2000–3000 kata |
+| **📄 Perataan** | Mendeteksi persentase baris justify per halaman | ≥40% baris justify |
+| **📊 Spasi Baris** | Median gap antar baris | 18 pt (6–30 pt dianggap OK) |
+| **📃 Ukuran Kertas** | Validasi ukuran kertas | A4 |
 
 ---
 
-## 🚀 Demo Langsung
+## 🖥️ Demo Langsung
 
 **Akses aplikasi:** [https://pdf-validator.streamlit.app/](https://pdf-validator.streamlit.app/)
 
@@ -27,10 +27,10 @@ Aplikasi berbasis **Streamlit** untuk memvalidasi format dokumen laporan (PDF) s
 ## 🛠️ Teknologi
 
 - [Streamlit](https://streamlit.io) – Framework UI interaktif
-- [pdfplumber](https://github.com/jsvine/pdfplumber) – Ekstraksi dan analisis PDF
-- [PyPDF2](https://pypi.org/project/PyPDF2/) – Membaca metadata PDF
+- [PyMuPDF (fitz)](https://pypi.org/project/PyMuPDF/) – Ekstraksi dan analisis PDF
 - [python-docx](https://github.com/python-openxml/python-docx) – Ekstraksi DOCX (opsional)
 - [Pandas](https://pandas.pydata.org/) – Manipulasi data untuk tampilan tabel
+- [Pillow](https://python-pillow.org/) – Rendering visualisasi halaman
 
 ---
 
@@ -40,7 +40,7 @@ Aplikasi berbasis **Streamlit** untuk memvalidasi format dokumen laporan (PDF) s
 .
 ├── app.py                # Aplikasi utama Streamlit
 ├── requirements.txt      # Dependensi Python
-├── runtime.txt           # Menentukan versi Python (3.12)
+├── runtime.txt           # Versi Python (3.12)
 ├── README.md             # Dokumentasi
 └── utils/
     ├── __init__.py
@@ -84,9 +84,10 @@ Aplikasi berbasis **Streamlit** untuk memvalidasi format dokumen laporan (PDF) s
 
 1. Upload file **PDF** melalui tombol di dashboard.
 2. Aplikasi akan menganalisis dan menampilkan:
-   - **Ringkasan dokumen** (halaman, kata, ukuran kertas)
-   - **Hasil validasi** per kriteria (✅/❌) dengan status jelas
-   - **Detail per halaman** (margin, spacing, justify, font, ukuran font)
+   - **Ringkasan dokumen** (halaman, kata, ukuran kertas, deteksi daftar pustaka)
+   - **Status validasi** per kriteria (✅/❌) dengan target jelas
+   - **Visualisasi halaman** dengan garis panduan margin dan spacing
+   - **Detail per halaman** dalam tabel (margin, spacing, justify, font, ukuran font)
    - **Rekomendasi perbaikan** jika ada format yang belum sesuai
 
 ---
@@ -105,12 +106,33 @@ Aplikasi berbasis **Streamlit** untuk memvalidasi format dokumen laporan (PDF) s
 
 ---
 
+## 🧠 Metode Deteksi
+
+### Margin
+- Prioritas: **Cropbox PDF** (jika ada)
+- Fallback: **Bounding box teks** dari semua baris
+- Toleransi: ±0.2 cm
+
+### Spasi Baris
+- Menggunakan **median gap** antar baris (robust terhadap outlier)
+- Gap >30 pt dianggap **antar paragraf** (bukan error)
+- Gap <6 pt dianggap **terlalu rapat** (error)
+
+### Perataan (Justify)
+- Baris dianggap justify jika:
+  1. Lebar baris ≥80% dari lebar efektif (margin kiri–kanan)
+  2. Ujung kanan baris dalam toleransi **5 pt** dari margin kanan
+- Baris dengan <3 kata diabaikan (heading, nomor halaman, dll.)
+- Minimal **40% baris** justify per halaman
+
+---
+
 ## 📌 Catatan Penting
 
 - Untuk hasil paling akurat, gunakan file **PDF** yang dihasilkan dari **Microsoft Word** dengan format yang sudah benar.
-- Margin dihitung dari **bounding box teks** (bukan dari cropbox), yang cocok untuk dokumen Word → PDF.
+- Margin dihitung dari **bounding box teks** (fallback) atau **cropbox** (prioritas), cocok untuk dokumen Word → PDF.
 - Spasi dihitung menggunakan **median gap** antar baris, robust terhadap outlier (tabel, heading, gambar).
-- **Deteksi margin dan spasi** masih dalam tahap penyempurnaan untuk meningkatkan akurasi.
+- **Deteksi daftar pustaka** menggunakan kata kunci: `DAFTAR PUSTAKA`, `REFERENCES`, `BIBLIOGRAPHY`, `REFERENSI`.
 
 ---
 
@@ -126,6 +148,18 @@ Pull request dan issue selalu diterima. Silakan buka issue jika menemukan bug at
 
 ---
 
+## 📜 Lisensi
+
+Proyek ini menggunakan lisensi **MIT** – silakan gunakan dan modifikasi sesuai kebutuhan.
+
 ---
 
-**Dibuat dengan ❤️ oleh Ridho Akbar Fadhilah**
+## 👨‍💻 Pembuat
+
+**Ridho Akbar Fadhilah**  
+NIM: 24050123130116  
+Statistika – Universitas Diponegoro  
+
+---
+
+**Dibuat dengan ❤️**
