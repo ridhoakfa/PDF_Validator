@@ -26,7 +26,7 @@ with st.sidebar:
     - **Font**: Times New Roman
     - **Ukuran font**: 12 pt
     - **Margin**: 3 cm (atas, bawah, kiri, kanan)
-    - **Jumlah kata**: 2000–3000 (di luar daftar pustaka)
+    - **Jumlah kata**: 2000–3000 **(di luar daftar pustaka dan lampiran)**
     - **Perataan**: Justify (rata kanan-kiri)
     - **Spasi**: 1.5 (≈ 18 pt) – gap 6–30 pt dianggap OK
 
@@ -73,19 +73,18 @@ if uploaded_file:
     with col_info1:
         st.metric("📄 Halaman", result['page_count'])
     with col_info2:
-        st.metric("📝 Kata (tanpa daftar pustaka)", result['main_words'])
+        st.metric("📝 Kata (tanpa daftar pustaka & lampiran)", result['main_words'])
     with col_info3:
         st.metric("📏 Ukuran Kertas", "A4 ✅" if result['paper_ok'] else "❌")
     with col_info4:
         if result.get('bibliography_detected', False):
-            st.metric("📖 Daftar Pustaka", "Terdeteksi ✅")
+            st.metric("📖 Daftar Pustaka/Lampiran", "Terdeteksi ✅")
         else:
-            st.metric("📖 Daftar Pustaka", "Tidak terdeteksi ⚠️")
+            st.metric("📖 Daftar Pustaka/Lampiran", "Tidak terdeteksi ⚠️")
     
     # ========== STATUS VALIDASI ==========
     st.subheader("✅ Status Validasi")
     
-    # Tampilkan status per kriteria dalam grid
     status_cols = st.columns(7)
     status_items = [
         ("📝 Kata", "words_ok", "2000-3000"),
@@ -100,7 +99,6 @@ if uploaded_file:
     for i, (label, key, target) in enumerate(status_items):
         with status_cols[i]:
             ok = result.get(key, False)
-            color = "green" if ok else "red"
             st.markdown(f"**{label}**  \n: {':white_check_mark:' if ok else ':x:'} {target}")
     
     # Tampilkan isu jika ada
@@ -130,11 +128,9 @@ if uploaded_file:
     # ========== VISUALISASI PER HALAMAN ==========
     st.subheader("🖼️ Visualisasi Per Halaman dengan Garis Panduan")
     
-    # Pilih halaman
     page_options = list(range(1, result['page_count'] + 1))
     selected_page = st.selectbox("Pilih halaman untuk dilihat", page_options, index=0)
     
-    # Tampilkan gambar
     img_bytes = render_page_with_guidelines(file_bytes, selected_page, dpi=100)
     if img_bytes:
         st.image(img_bytes, caption=f"Halaman {selected_page}", use_container_width=True)
@@ -257,9 +253,8 @@ if uploaded_file:
                 st.write("✅ Semua gap OK.")
             st.markdown("---")
     
-    # ========== JUSTIFY DETAIL (TAMBAHAN) ==========
+    # ========== JUSTIFY DETAIL ==========
     with st.expander("📄 Detail Perataan (Justify) per Halaman", expanded=False):
-        # Hitung rata-rata persentase justify seluruh halaman
         avg_justify = sum(j['percentage'] for j in result['justify_details']) / len(result['justify_details']) if result['justify_details'] else 0
         st.write(f"**Rata-rata persentase justify seluruh dokumen:** {avg_justify:.1f}%")
         justify_rows = []
@@ -292,7 +287,7 @@ else:
     | **Font** | Times New Roman (semua teks) | - |
     | **Ukuran Font** | 12 pt | ±1 pt |
     | **Margin** | Atas 3, Bawah 3, Kiri 3, Kanan 3 cm | ±0.2 cm |
-    | **Jumlah Kata** | 2000 - 3000 kata **(di luar daftar pustaka)** | - |
+    | **Jumlah Kata** | 2000 - 3000 kata **(di luar daftar pustaka & lampiran)** | - |
     | **Rata** | Rata kanan-kiri (Justify) | ≥40% baris justify |
     | **Spasi** | 1.5 (≈ 18 pt) | ±12 pt (6–30 pt OK) |
     | **Kertas** | A4 | - |
