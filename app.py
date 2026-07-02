@@ -30,6 +30,10 @@ with st.sidebar:
     - **Perataan**: Justify (rata kanan-kiri)
     - **Spasi**: 1.5 (≈ 18 pt) – gap 6–30 pt dianggap OK
 
+    **Catatan penting:**
+    - Header di 10% atas halaman **DIABAIKAN** dari semua pengecekan.
+    - Footer di 10% bawah halaman **DIABAIKAN** dari semua pengecekan.
+
     **Cara baca visualisasi:**
     - 🟥 **Garis merah** = batas margin 3 cm
     - 🟦 **Garis biru** = posisi ideal baris berikutnya (18 pt)
@@ -108,7 +112,6 @@ if uploaded_file:
             df_parts = pd.DataFrame(data)
             st.dataframe(df_parts, use_container_width=True, hide_index=True)
             
-            # Tampilkan total kata keseluruhan
             total_main = part_details.get('main', {}).get('word_count', 0)
             total_bib = part_details.get('bibliography', {}).get('word_count', 0)
             total_att = part_details.get('attachment', {}).get('word_count', 0)
