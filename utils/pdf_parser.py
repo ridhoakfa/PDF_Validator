@@ -24,25 +24,52 @@ def extract_text_from_pdf(file_bytes):
     except Exception as e:
         return f"Error: {e}"
 
-# ========== BIBLIOGRAPHY DETECTION ==========
-def detect_bibliography(text):
-    keywords = ["DAFTAR PUSTAKA", "REFERENCES", "BIBLIOGRAPHY", "REFERENSI"]
+# ========== DETEKSI BAGIAN YANG DIKECUALIKAN (DAFTAR PUSTAKA & LAMPIRAN) ==========
+def find_excluded_section_start(text):
+    """
+    Cari indeks baris pertama dari bagian yang harus dikecualikan:
+    - Daftar Pustaka / Referensi
+    - Lampiran / Appendix
+    Mengembalikan indeks baris (0-based) atau None jika tidak ditemukan.
+    """
+    keywords = [
+        # Daftar Pustaka
+        "DAFTAR PUSTAKA", "REFERENSI", "REFERENCES", "BIBLIOGRAPHY", "PUSTAKA",
+        # Lampiran
+        "LAMPIRAN", "APPENDIX", "ATTACHMENT", "LAMP.", "APP."
+    ]
     lines = text.split('\n')
     total = len(lines)
     if total == 0:
         return None
-    start = int(total * 0.8)
-    for i in range(start, total):
-        line = lines[i].strip().upper()
-        for kw in keywords:
-            if kw in line:
-                return i
-    return None
 
-def extract_text_before_bibliography(text):
-    idx = detect_bibliography(text)
+    # Cari dari atas ke bawah, ambil indeks paling kecil (yang pertama muncul)
+    earliest_idx = None
+    for i, line in enumerate(lines):
+        line_clean = line.strip().upper()
+        if not line_clean:
+            continue
+        for kw in keywords:
+            # Cek apakah keyword ada di baris (case-insensitive)
+            if kw in line_clean:
+                # Hindari false positive: kata "PUSTAKA" mungkin muncul di tengah kalimat
+                # tapi biasanya di header hanya ada kata itu saja atau dengan nomor.
+                # Kita anggap aman karena di laporan akademik header tersebut eksplisit.
+                if earliest_idx is None or i < earliest_idx:
+                    earliest_idx = i
+                break  # cukup satu keyword per baris
+
+    return earliest_idx
+
+def extract_text_before_excluded_sections(text):
+    """
+    Kembalikan teks sebelum bagian yang dikecualikan (Daftar Pustaka atau Lampiran).
+    Jika tidak ditemukan, kembalikan seluruh teks.
+    """
+    idx = find_excluded_section_start(text)
     if idx is not None:
         lines = text.split('\n')
+        # Ambil semua baris sebelum idx (tidak termasuk baris header)
         return '\n'.join(lines[:idx])
     return text
 
@@ -184,12 +211,11 @@ def get_pdf_detailed_info(file_bytes):
             total_words += word_count
             
             # === SPACING (per baris) ===
-            # Hitung semua gap antar baris
             all_gaps = []
             gap_details = []
             for i in range(len(lines) - 1):
                 gap = lines[i+1]['y0'] - lines[i]['y0']
-                if 0 < gap < 200:  # batas aman
+                if 0 < gap < 200:
                     all_gaps.append(gap)
                     gap_details.append({
                         'line_from': i + 1,
@@ -198,15 +224,12 @@ def get_pdf_detailed_info(file_bytes):
                         'deviation': gap - 18,
                     })
             
-            # Tentukan median gap untuk baseline
             median_gap = statistics.median(all_gaps) if all_gaps else 0
             
-            # Evaluasi setiap gap: OK jika dalam rentang median ±6 pt dan 6-30 pt
-            # Gap >30 pt dianggap antar paragraf (tidak dianggap error)
             for d in gap_details:
                 gap = d['gap']
                 if gap > 30:
-                    d['is_1_5'] = True  # anggap OK (antar paragraf)
+                    d['is_1_5'] = True
                     d['status'] = 'ANTAR PARAGRAF'
                     d['deviation'] = gap - 18
                 elif gap < 6:
@@ -214,7 +237,6 @@ def get_pdf_detailed_info(file_bytes):
                     d['status'] = 'KURANG'
                     d['deviation'] = gap - 18
                 else:
-                    # Dalam rentang 6-30, cek apakah dekat dengan median
                     if abs(gap - median_gap) <= 6:
                         d['is_1_5'] = True
                         d['status'] = 'OK'
@@ -223,7 +245,6 @@ def get_pdf_detailed_info(file_bytes):
                         d['status'] = 'MELEWATI'
                     d['deviation'] = gap - 18
             
-            # Spacing overall: median gap harus dalam rentang 6-30
             is_1_5_overall = 6 <= median_gap <= 30
             spacing_info = {
                 'spacing': median_gap,
@@ -234,24 +255,19 @@ def get_pdf_detailed_info(file_bytes):
                 'filtered_lines': len(all_gaps)
             }
             
-            # === JUSTIFY (PERBAIKAN) ===
-            # Ambil margin kiri dan kanan dari halaman
+            # === JUSTIFY ===
             left_margin = margin_info['left']
             right_margin = margin_info['right']
             effective_width = width - left_margin - right_margin
-            tolerance = 5  # poin, toleransi untuk selisih dengan margin kanan
+            tolerance = 5
             
             justify_lines = 0
             total_lines_valid = 0
             for line in lines:
-                # Abaikan baris yang terlalu pendek (misal < 3 kata)
                 if len(line['words']) < 3:
                     continue
                 total_lines_valid += 1
                 line_width = line['x1'] - line['x0']
-                # Syarat justify:
-                # 1. lebar baris mendekati lebar efektif (minimal 80%)
-                # 2. ujung kanan baris dekat dengan margin kanan (dalam toleransi)
                 if (line_width > 0.80 * effective_width and
                     abs(line['x1'] - (width - right_margin)) <= tolerance):
                     justify_lines += 1
@@ -296,12 +312,6 @@ def get_pdf_detailed_info(file_bytes):
 
 # ========== RENDER PAGE WITH GUIDELINES ==========
 def render_page_with_guidelines(file_bytes, page_num, dpi=100):
-    """
-    Render halaman dengan:
-    - Merah: batas margin 3 cm
-    - Biru: posisi ideal baris berikutnya (spacing 1.5) dihitung dari baris sebelumnya
-    - Hijau/Oranye: label gap aktual dengan status OK/MELEWATI/ANTAR PARAGRAF
-    """
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
@@ -320,7 +330,6 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         target_margin_pt = cm_to_pt(3.0)
         margin_px = target_margin_pt * scale
         
-        # Gambar batas margin (merah)
         draw.rectangle(
             [margin_px, margin_px, 
              pix.width - margin_px, pix.height - margin_px],
@@ -329,7 +338,6 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         )
         draw.text((10, 10), "Margin target 3 cm (merah)", fill=(255, 0, 0))
         
-        # Dapatkan baris teks
         lines = get_lines_with_positions(page)
         if not lines:
             doc.close()
@@ -338,54 +346,41 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
             img_bytes.seek(0)
             return img_bytes.getvalue()
         
-        # Gambar spacing per baris
         for i, line in enumerate(lines):
             y0_px = line['y0'] * scale
-            
-            # Gambar titik hijau untuk baris aktual
             draw.ellipse([(10, y0_px-2), (14, y0_px+2)], fill=(0, 255, 0))
             
             if i < len(lines) - 1:
                 gap_actual = lines[i+1]['y0'] - line['y0']
                 ideal_y_px = (line['y0'] + 18) * scale
-                actual_y_px = lines[i+1]['y0'] * scale
-                
-                # Garis biru = posisi ideal (18 pt dari baris saat ini)
                 draw.line([(20, ideal_y_px), (pix.width - 20, ideal_y_px)], 
                           fill=(0, 100, 255), width=1)
                 
-                # Tentukan status gap
                 if gap_actual > 30:
                     status_text = " (extra space)"
-                    color = (200, 100, 0)  # oranye tua
+                    color = (200, 100, 0)
                 elif gap_actual < 6:
                     status_text = " (terlalu rapat)"
-                    color = (255, 0, 0)  # merah
+                    color = (255, 0, 0)
                 else:
-                    # Cek apakah dekat dengan median (akan dihitung di analyze)
-                    # Tapi di render ini kita hanya tampilkan warna berdasarkan gap
                     if 6 <= gap_actual <= 30:
                         status_text = ""
-                        color = (0, 150, 0)  # hijau
+                        color = (0, 150, 0)
                     else:
                         status_text = " (deviasi)"
-                        color = (255, 165, 0)  # oranye
+                        color = (255, 165, 0)
                 
                 label = f"{gap_actual:.1f}pt{status_text}"
                 draw.text((pix.width - 120, ideal_y_px - 8), label, fill=color)
         
-        # Info margin dan spacing
         margin_data = get_page_margin(page)
         if margin_data:
             info = f"Margin aktual: Kiri={pt_to_cm(margin_data['left']):.2f}cm, Kanan={pt_to_cm(margin_data['right']):.2f}cm, Atas={pt_to_cm(margin_data['top']):.2f}cm, Bawah={pt_to_cm(margin_data['bottom']):.2f}cm"
             draw.text((10, 30), info, fill=(0, 0, 0))
             draw.text((10, 50), f"Sumber: {margin_data.get('source', 'unknown')}", fill=(0, 0, 0))
         
-        # Judul
         draw.text((10, 70), "Garis biru = posisi ideal baris berikutnya (18 pt) | Hijau=OK, Oranye=extra space, Merah=terlalu rapat", fill=(0, 0, 0))
         draw.text((10, 90), "Gap >30 pt dianggap antar paragraf (bukan error line spacing)", fill=(0, 0, 0))
-        
-        # Info halaman
         draw.text((10, pix.height - 30), f"Halaman {page_num}", fill=(0, 0, 0))
         
         doc.close()
@@ -400,9 +395,6 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
 
 # ========== ANALYZE PAGE DEVIATIONS ==========
 def analyze_page_deviations(file_bytes, page_num):
-    """
-    Analisis margin dan spacing per baris dengan kategorisasi OK/antar paragraf.
-    """
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
@@ -412,7 +404,6 @@ def analyze_page_deviations(file_bytes, page_num):
         width_pt = page.rect.width
         height_pt = page.rect.height
         
-        # Margin
         margin_data = get_page_margin(page)
         if margin_data is None:
             margin_data = {'left': 0, 'right': 0, 'top': 0, 'bottom': 0, 'source': 'none'}
@@ -429,7 +420,6 @@ def analyze_page_deviations(file_bytes, page_num):
             else:
                 margin_status[side] = f"AMAN (deviasi {dev_cm:+.2f} cm)"
         
-        # Lines
         lines = get_lines_with_positions(page)
         spacing_deviations = []
         for i in range(len(lines) - 1):
@@ -437,14 +427,12 @@ def analyze_page_deviations(file_bytes, page_num):
             if 0 < gap < 200:
                 if gap > 30:
                     status = "ANTAR PARAGRAF"
-                    is_ok = True  # tidak dianggap error
+                    is_ok = True
                 elif gap < 6:
                     status = "TERLALU RAPAT"
                     is_ok = False
                 else:
-                    # Cek apakah gap dekat dengan median (akan dihitung di get_pdf_detailed_info)
-                    # Di sini kita hanya gunakan rentang 6-30
-                    is_ok = True  # anggap OK
+                    is_ok = True
                     status = "OK"
                 spacing_deviations.append({
                     'line': i + 1,
@@ -454,11 +442,10 @@ def analyze_page_deviations(file_bytes, page_num):
                     'is_ok': is_ok
                 })
         
-        # === JUSTIFY (PERBAIKAN) ===
         left_margin = margin_data['left']
         right_margin = margin_data['right']
         effective_width = width_pt - left_margin - right_margin
-        tolerance = 5  # poin
+        tolerance = 5
         
         justify_count = 0
         total_valid = 0
@@ -500,8 +487,14 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         return {'error': info['error']}
     
     text = extract_text_from_pdf(file_bytes)
-    main_text = extract_text_before_bibliography(text)
+    
+    # === EKSTRAK TEKS UTAMA (SEBELUM DAFTAR PUSTAKA & LAMPIRAN) ===
+    main_text = extract_text_before_excluded_sections(text)
     main_word_count = len(main_text.split())
+    
+    # Deteksi apakah ada bagian yang dikecualikan
+    excluded_start = find_excluded_section_start(text)
+    excluded_detected = excluded_start is not None
     
     # === UKURAN KERTAS ===
     a4_w, a4_h = 595.28, 841.89
@@ -562,7 +555,6 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
     spacing_ok = True
     for p in info['page_data']:
         s = p['spacing_info']
-        # Overall spacing OK jika median gap dalam 6-30 pt
         is_ok = 6 <= s['spacing'] <= 30
         spacing_details.append({
             'page': p['page'],
@@ -613,7 +605,6 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         'justify_details': justify_details,
         'page_data': info['page_data'],
         'metadata': info['metadata'],
-        'bibliography_detected': detect_bibliography(text) is not None,
+        'excluded_sections_detected': excluded_detected,
         'all_ok': all_ok
     }
-
