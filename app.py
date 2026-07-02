@@ -69,18 +69,52 @@ if uploaded_file:
     # ========== RINGKASAN DOKUMEN ==========
     st.subheader("📊 Ringkasan Dokumen")
     
-    col_info1, col_info2, col_info3, col_info4 = st.columns(4)
+    col_info1, col_info2, col_info3, col_info4, col_info5 = st.columns(5)
     with col_info1:
         st.metric("📄 Halaman", result['page_count'])
     with col_info2:
-        st.metric("📝 Kata (tanpa daftar pustaka & lampiran)", result['main_words'])
+        st.metric("📝 Kata (tanpa dafpus & lampiran)", result['main_words'])
     with col_info3:
         st.metric("📏 Ukuran Kertas", "A4 ✅" if result['paper_ok'] else "❌")
     with col_info4:
         if result.get('bibliography_detected', False):
-            st.metric("📖 Daftar Pustaka/Lampiran", "Terdeteksi ✅")
+            st.metric("📖 Daftar Pustaka", "Terdeteksi ✅")
         else:
-            st.metric("📖 Daftar Pustaka/Lampiran", "Tidak terdeteksi ⚠️")
+            st.metric("📖 Daftar Pustaka", "Tidak terdeteksi ⚠️")
+    with col_info5:
+        if result.get('attachment_detected', False):
+            st.metric("📎 Lampiran", "Terdeteksi ✅")
+        else:
+            st.metric("📎 Lampiran", "Tidak terdeteksi ⚠️")
+    
+    # ========== DETAIL PEMBAGIAN DOKUMEN ==========
+    with st.expander("📊 Detail Pembagian Dokumen (Kata & Halaman)", expanded=False):
+        part_details = result.get('part_details', {})
+        if part_details:
+            data = []
+            for name, detail in part_details.items():
+                label = {
+                    'main': '📄 Bagian Utama',
+                    'bibliography': '📖 Daftar Pustaka',
+                    'attachment': '📎 Lampiran'
+                }.get(name, name.capitalize())
+                word_count = detail['word_count']
+                page_range = detail['page_range'] if detail['page_range'] else "(kosong)"
+                data.append({
+                    'Bagian': label,
+                    'Jumlah Kata': word_count,
+                    'Halaman': page_range
+                })
+            df_parts = pd.DataFrame(data)
+            st.dataframe(df_parts, use_container_width=True, hide_index=True)
+            
+            # Tampilkan total kata keseluruhan
+            total_main = part_details.get('main', {}).get('word_count', 0)
+            total_bib = part_details.get('bibliography', {}).get('word_count', 0)
+            total_att = part_details.get('attachment', {}).get('word_count', 0)
+            st.caption(f"**Total kata utama:** {total_main} | **Daftar pustaka:** {total_bib} | **Lampiran:** {total_att}")
+        else:
+            st.info("Tidak ada deteksi batas dokumen (semua teks dianggap bagian utama).")
     
     # ========== STATUS VALIDASI ==========
     st.subheader("✅ Status Validasi")
