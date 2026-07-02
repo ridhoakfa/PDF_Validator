@@ -35,18 +35,15 @@ def detect_boundaries(text):
     if total == 0:
         return {'bibliography_idx': None, 'attachment_idx': None}
 
-    # Pola untuk daftar pustaka (case-insensitive)
     bib_pattern = re.compile(
         r'(?:^|\s)(daftar\s+pustaka|references|bibliography)(?:$|\s)',
         re.IGNORECASE
     )
-    # Pola untuk lampiran
     att_pattern = re.compile(
         r'(?:^|\s)(lampiran|appendix)(?:$|\s)',
         re.IGNORECASE
     )
 
-    # Abaikan 20% awal dokumen (menghindari false positive)
     start_index = int(total * 0.2)
     bib_idx = None
     att_idx = None
@@ -54,18 +51,11 @@ def detect_boundaries(text):
     for i, line in enumerate(lines):
         if i < start_index:
             continue
-        # Bersihkan penomoran/angka di awal (misal "BAB IV LAMPIRAN" -> "LAMPIRAN")
         cleaned = re.sub(r'^[\d\s\.\-]+', '', line).strip()
         if bib_idx is None and bib_pattern.search(cleaned):
             bib_idx = i
         if att_idx is None and att_pattern.search(cleaned):
             att_idx = i
-        # Jika keduanya sudah ditemukan, kita tetap lanjutkan? Tidak perlu, karena indeks pertama sudah didapat.
-        # Tapi kita perlu indeks terkecil untuk masing-masing, dan scanning sudah urut dari awal.
-        # Karena kita scanning dari atas, indeks pertama yang ditemukan adalah yang paling awal.
-        # Jadi kita bisa berhenti jika keduanya sudah ditemukan? Tidak, karena mungkin ada yang lebih awal? 
-        # Kita sudah scanning dari awal, jadi indeks pertama adalah yang paling awal.
-        # Kita bisa break jika keduanya ditemukan untuk efisiensi.
         if bib_idx is not None and att_idx is not None:
             break
 
@@ -78,19 +68,8 @@ def get_page_mapping(file_bytes):
     for page_num in range(len(doc)):
         page_text = doc[page_num].get_text()
         lines = page_text.split('\n')
-        # Jika halaman kosong, kita tetap tambahkan entri? 
-        # Untuk keperluan pemetaan, jika tidak ada baris, tidak perlu ditambahkan.
-        # Tapi kita perlu menjaga korespondensi indeks dengan baris di full text.
-        # Karena full text adalah gabungan semua halaman dengan newline, 
-        # kita perlu memastikan jumlah baris sama.
         for _ in lines:
             line_to_page.append(page_num + 1)
-        # Jika halaman kosong (lines kosong), tetap tambahkan satu entri? 
-        # Sebenarnya jika halaman kosong, tidak ada baris, jadi tidak perlu.
-        # Namun untuk menjaga indeks, kita harus memastikan bahwa line_to_page memiliki
-        # panjang yang sama dengan jumlah baris di full text.
-        # Full text dari extract_text_from_pdf juga menggunakan '\n' antar halaman.
-        # Jadi untuk halaman kosong, tidak ada baris, sehingga line_to_page tetap sesuai.
     doc.close()
     return line_to_page
 
@@ -105,34 +84,28 @@ def split_document_parts(text, line_to_page, boundaries):
     bib_idx = boundaries['bibliography_idx']
     att_idx = boundaries['attachment_idx']
 
-    # Kumpulkan indeks batas yang valid
     indices = []
     if bib_idx is not None:
         indices.append(('bibliography', bib_idx))
     if att_idx is not None:
         indices.append(('attachment', att_idx))
-    indices.sort(key=lambda x: x[1])  # Urutkan berdasarkan indeks baris
+    indices.sort(key=lambda x: x[1])
 
     parts = {}
     if not indices:
-        # Tidak ada batas, semua adalah bagian utama
         parts['main'] = (0, total_lines)
     else:
-        # Bagian utama dari awal sampai batas pertama
         first_idx = indices[0][1]
         parts['main'] = (0, first_idx)
-        # Bagian-bagian selanjutnya
         for i, (name, idx) in enumerate(indices):
             next_idx = indices[i+1][1] if i+1 < len(indices) else total_lines
             parts[name] = (idx, next_idx)
 
-    # Hitung detail per bagian
     part_details = {}
     for name, (start, end) in parts.items():
         part_lines = all_lines[start:end]
         part_text = '\n'.join(part_lines)
         word_count = len(part_text.split())
-        # Ambil halaman yang tercakup
         pages = set()
         for i in range(start, end):
             if i < len(line_to_page):
@@ -150,15 +123,16 @@ def split_document_parts(text, line_to_page, boundaries):
 
     return part_details
 
-# ========== GET LINES WITH POSITIONS ==========
-def get_lines_with_positions(page):
+# ========== GET LINES WITH POSITIONS (dengan deteksi header) ==========
+def get_lines_with_positions(page, header_threshold=0.10):
     """
-    Dapatkan daftar baris teks dengan koordinat (x0, y0, x1, y1) dan teks.
+    Dapatkan daftar baris teks dengan koordinat dan flag is_header.
+    Header = baris yang berada di area threshold dari atas halaman.
     """
     words = page.get_text("words")
     if not words:
-        return []
-    
+        return [], []
+
     # Kelompokkan kata menjadi baris (toleransi 3 pt)
     lines = []
     current_line = []
@@ -176,40 +150,41 @@ def get_lines_with_positions(page):
             current_y = y0
     if current_line:
         lines.append(current_line)
-    
-    # Filter header/footer (abaikan baris di 10% atas/bawah dengan teks pendek/angka)
+
     height = page.rect.height
-    filtered_lines = []
+    header_limit = height * header_threshold
+
+    all_lines = []
+    header_lines = []
+    body_lines = []
+
     for line_words in lines:
         if not line_words:
             continue
         y0 = min(w[1] for w in line_words)
         y1 = max(w[3] for w in line_words)
         text = ' '.join(w[4] for w in line_words)
-        is_top = y0 < height * 0.1
-        is_bottom = y1 > height * 0.9
-        if not ((is_top or is_bottom) and (len(text) < 10 or text.isdigit())):
-            x0 = min(w[0] for w in line_words)
-            x1 = max(w[2] for w in line_words)
-            filtered_lines.append({
-                'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1,
-                'text': text,
-                'words': line_words,
-                'line_num': len(filtered_lines) + 1
-            })
-    
-    # Urutkan berdasarkan y0
-    filtered_lines.sort(key=lambda l: l['y0'])
-    for i, line in enumerate(filtered_lines):
-        line['line_num'] = i + 1
-    
-    return filtered_lines
+        x0 = min(w[0] for w in line_words)
+        x1 = max(w[2] for w in line_words)
+        is_header = y1 <= header_limit  # baris sepenuhnya di area header
+
+        line_info = {
+            'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1,
+            'text': text,
+            'words': line_words,
+            'is_header': is_header,
+            'line_num': len(all_lines) + 1
+        }
+        all_lines.append(line_info)
+        if is_header:
+            header_lines.append(line_info)
+        else:
+            body_lines.append(line_info)
+
+    return all_lines, header_lines, body_lines
 
 # ========== GET MARGIN FROM CROPBOX ==========
 def get_page_margin(page):
-    """
-    Dapatkan margin dari cropbox PDF jika ada, fallback ke bounding box teks.
-    """
     try:
         media_box = page.mediabox
         crop_box = page.cropbox
@@ -228,15 +203,15 @@ def get_page_margin(page):
                 }
     except:
         pass
-    
-    # Fallback: bounding box teks
-    lines = get_lines_with_positions(page)
-    if not lines:
+
+    # Fallback: bounding box teks (dari semua baris termasuk header)
+    all_lines, _, _ = get_lines_with_positions(page)
+    if not all_lines:
         return {'left': 0, 'right': 0, 'top': 0, 'bottom': 0, 'source': 'none'}
-    all_x0 = [l['x0'] for l in lines]
-    all_x1 = [l['x1'] for l in lines]
-    all_y0 = [l['y0'] for l in lines]
-    all_y1 = [l['y1'] for l in lines]
+    all_x0 = [l['x0'] for l in all_lines]
+    all_x1 = [l['x1'] for l in all_lines]
+    all_y0 = [l['y0'] for l in all_lines]
+    all_y1 = [l['y1'] for l in all_lines]
     width = page.rect.width
     height = page.rect.height
     return {
@@ -253,41 +228,57 @@ def get_pdf_detailed_info(file_bytes):
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         pages = len(doc)
         page_data = []
-        total_words = 0
-        all_fonts = Counter()
-        all_sizes = []
+        total_words_body = 0
+        all_fonts_body = Counter()
+        all_sizes_body = []
 
         for page_num in range(pages):
             page = doc[page_num]
             width = page.rect.width
             height = page.rect.height
 
-            lines = get_lines_with_positions(page)
+            # Dapatkan baris dengan deteksi header
+            all_lines, header_lines, body_lines = get_lines_with_positions(page)
+
+            # Info margin dari semua baris (termasuk header)
             margin_info = get_page_margin(page)
-            
+
+            # === FONT INFO dari baris BODY saja ===
             fonts_on_page = defaultdict(int)
             font_sizes_on_page = []
+            # Ambil font dari body lines
+            body_text = ' '.join([line['text'] for line in body_lines])
+            # Untuk mendapatkan font & size, kita tetap perlu parsing dari page dict
+            # Tapi kita bisa filter spans yang berada di luar area header
+            # Cara lebih efisien: gunakan page.get_text("dict") dan filter berdasarkan y
             for block in page.get_text("dict")["blocks"]:
                 if block["type"] == 0:
                     for line in block["lines"]:
                         for span in line["spans"]:
+                            # Periksa apakah span ini di area header?
+                            # Kita gunakan y tengah span
+                            span_y = (span['bbox'][1] + span['bbox'][3]) / 2
+                            if span_y <= height * 0.10:
+                                continue  # abaikan span di header
                             font = span["font"]
                             size = span["size"]
                             fonts_on_page[font] += 1
                             if size > 1:
                                 font_sizes_on_page.append(size)
-                                all_sizes.append(size)
+                                all_sizes_body.append(size)
+
             avg_font_size = statistics.mean(font_sizes_on_page) if font_sizes_on_page else 0
             unique_font_sizes = sorted(set(font_sizes_on_page)) if font_sizes_on_page else []
-            
-            word_count = len(page.get_text().split())
-            total_words += word_count
-            
-            # === SPACING ===
+
+            # === Jumlah kata dari BODY ===
+            word_count_body = len(body_text.split())
+            total_words_body += word_count_body
+
+            # === SPACING dari baris BODY ===
             all_gaps = []
             gap_details = []
-            for i in range(len(lines) - 1):
-                gap = lines[i+1]['y0'] - lines[i]['y0']
+            for i in range(len(body_lines) - 1):
+                gap = body_lines[i+1]['y0'] - body_lines[i]['y0']
                 if 0 < gap < 200:
                     all_gaps.append(gap)
                     gap_details.append({
@@ -296,9 +287,9 @@ def get_pdf_detailed_info(file_bytes):
                         'gap': gap,
                         'deviation': gap - 18,
                     })
-            
+
             median_gap = statistics.median(all_gaps) if all_gaps else 0
-            
+
             for d in gap_details:
                 gap = d['gap']
                 if gap > 30:
@@ -317,26 +308,25 @@ def get_pdf_detailed_info(file_bytes):
                         d['is_1_5'] = False
                         d['status'] = 'MELEWATI'
                     d['deviation'] = gap - 18
-            
+
             is_1_5_overall = 6 <= median_gap <= 30
             spacing_info = {
                 'spacing': median_gap,
                 'is_1_5': is_1_5_overall,
                 'details': gap_details,
-                'outliers': [],
-                'total_lines': len(lines),
+                'total_lines': len(body_lines),
                 'filtered_lines': len(all_gaps)
             }
-            
-            # === JUSTIFY ===
+
+            # === JUSTIFY dari baris BODY ===
             left_margin = margin_info['left']
             right_margin = margin_info['right']
             effective_width = width - left_margin - right_margin
             tolerance = 5
-            
+
             justify_lines = 0
             total_lines_valid = 0
-            for line in lines:
+            for line in body_lines:
                 if len(line['words']) < 3:
                     continue
                 total_lines_valid += 1
@@ -344,7 +334,7 @@ def get_pdf_detailed_info(file_bytes):
                 if (line_width > 0.80 * effective_width and
                     abs(line['x1'] - (width - right_margin)) <= tolerance):
                     justify_lines += 1
-            
+
             percentage = (justify_lines / total_lines_valid * 100) if total_lines_valid > 0 else 0
             justify_info = {
                 'justify': percentage >= 40,
@@ -352,12 +342,33 @@ def get_pdf_detailed_info(file_bytes):
                 'total_lines': total_lines_valid,
                 'justify_lines': justify_lines
             }
-            
+
+            # === HEADER DETAIL ===
+            header_details = []
+            for h in header_lines:
+                # Cari font & size dari header (dari spans)
+                header_fonts = set()
+                header_sizes = []
+                for block in page.get_text("dict")["blocks"]:
+                    if block["type"] == 0:
+                        for line in block["lines"]:
+                            for span in line["spans"]:
+                                span_y = (span['bbox'][1] + span['bbox'][3]) / 2
+                                if span_y <= height * 0.10:
+                                    header_fonts.add(span['font'])
+                                    header_sizes.append(span['size'])
+                header_details.append({
+                    'text': h['text'],
+                    'font': ', '.join(header_fonts) if header_fonts else 'unknown',
+                    'size': round(statistics.mean(header_sizes), 1) if header_sizes else 0,
+                    'y_pos': round(h['y0'], 1)
+                })
+
             page_data.append({
                 'page': page_num + 1,
                 'width': width,
                 'height': height,
-                'word_count': word_count,
+                'word_count': word_count_body,  # hanya body
                 'fonts': dict(fonts_on_page),
                 'font_sizes': font_sizes_on_page,
                 'unique_font_sizes': unique_font_sizes,
@@ -365,19 +376,22 @@ def get_pdf_detailed_info(file_bytes):
                 'margin_info': margin_info,
                 'spacing_info': spacing_info,
                 'justify_info': justify_info,
-                'lines': lines
+                'lines': body_lines,  # hanya body untuk visualisasi/analisis lanjutan
+                'header_lines': header_lines,
+                'header_details': header_details,
+                'has_header': len(header_lines) > 0
             })
-            
-            all_fonts.update(fonts_on_page)
+
+            all_fonts_body.update(fonts_on_page)
 
         doc.close()
 
         return {
             'page_count': pages,
             'page_data': page_data,
-            'total_words': total_words,
-            'all_fonts': dict(all_fonts),
-            'all_sizes': all_sizes,
+            'total_words': total_words_body,
+            'all_fonts': dict(all_fonts_body),
+            'all_sizes': all_sizes_body,
             'metadata': {}
         }
     except Exception as e:
@@ -389,47 +403,48 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
             return None
-        
+
         page = doc[page_num - 1]
         zoom = dpi / 72
         mat = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         draw = ImageDraw.Draw(img)
-        
+
         width_pt = page.rect.width
         height_pt = page.rect.height
         scale = dpi / 72
         target_margin_pt = cm_to_pt(3.0)
         margin_px = target_margin_pt * scale
-        
+
         draw.rectangle(
-            [margin_px, margin_px, 
+            [margin_px, margin_px,
              pix.width - margin_px, pix.height - margin_px],
             outline=(255, 0, 0),
             width=2
         )
         draw.text((10, 10), "Margin target 3 cm (merah)", fill=(255, 0, 0))
-        
-        lines = get_lines_with_positions(page)
-        if not lines:
+
+        all_lines, header_lines, body_lines = get_lines_with_positions(page)
+        if not all_lines:
             doc.close()
             img_bytes = io.BytesIO()
             img.save(img_bytes, format="PNG")
             img_bytes.seek(0)
             return img_bytes.getvalue()
-        
-        for i, line in enumerate(lines):
+
+        # Gambar spacing hanya untuk body lines
+        for i, line in enumerate(body_lines):
             y0_px = line['y0'] * scale
             draw.ellipse([(10, y0_px-2), (14, y0_px+2)], fill=(0, 255, 0))
-            
-            if i < len(lines) - 1:
-                gap_actual = lines[i+1]['y0'] - line['y0']
+
+            if i < len(body_lines) - 1:
+                gap_actual = body_lines[i+1]['y0'] - line['y0']
                 ideal_y_px = (line['y0'] + 18) * scale
-                
-                draw.line([(20, ideal_y_px), (pix.width - 20, ideal_y_px)], 
+
+                draw.line([(20, ideal_y_px), (pix.width - 20, ideal_y_px)],
                           fill=(0, 100, 255), width=1)
-                
+
                 if gap_actual > 30:
                     status_text = " (extra space)"
                     color = (200, 100, 0)
@@ -443,26 +458,35 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
                     else:
                         status_text = " (deviasi)"
                         color = (255, 165, 0)
-                
+
                 label = f"{gap_actual:.1f}pt{status_text}"
                 draw.text((pix.width - 120, ideal_y_px - 8), label, fill=color)
-        
+
+        # Tandai area header dengan warna kuning transparan
+        header_limit_px = height_pt * 0.10 * scale
+        draw.rectangle(
+            [0, 0, pix.width, header_limit_px],
+            fill=(255, 255, 0, 50),
+            outline=None
+        )
+        draw.text((10, header_limit_px - 15), "Area Header (diabaikan)", fill=(200, 200, 0))
+
         margin_data = get_page_margin(page)
         if margin_data:
             info = f"Margin aktual: Kiri={pt_to_cm(margin_data['left']):.2f}cm, Kanan={pt_to_cm(margin_data['right']):.2f}cm, Atas={pt_to_cm(margin_data['top']):.2f}cm, Bawah={pt_to_cm(margin_data['bottom']):.2f}cm"
             draw.text((10, 30), info, fill=(0, 0, 0))
             draw.text((10, 50), f"Sumber: {margin_data.get('source', 'unknown')}", fill=(0, 0, 0))
-        
+
         draw.text((10, 70), "Garis biru = posisi ideal baris berikutnya (18 pt) | Hijau=OK, Oranye=extra space, Merah=terlalu rapat", fill=(0, 0, 0))
         draw.text((10, 90), "Gap >30 pt dianggap antar paragraf (bukan error line spacing)", fill=(0, 0, 0))
         draw.text((10, pix.height - 30), f"Halaman {page_num}", fill=(0, 0, 0))
-        
+
         doc.close()
         img_bytes = io.BytesIO()
         img.save(img_bytes, format="PNG")
         img_bytes.seek(0)
         return img_bytes.getvalue()
-        
+
     except Exception as e:
         print(f"Error rendering page: {e}")
         return None
@@ -473,16 +497,16 @@ def analyze_page_deviations(file_bytes, page_num):
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
             return None
-        
+
         page = doc[page_num - 1]
         width_pt = page.rect.width
         height_pt = page.rect.height
-        
+
         margin_data = get_page_margin(page)
         if margin_data is None:
             margin_data = {'left': 0, 'right': 0, 'top': 0, 'bottom': 0, 'source': 'none'}
         target_margin_pt = cm_to_pt(3.0)
-        
+
         margin_status = {}
         margin_deviations_cm = {}
         for side in ['left', 'right', 'top', 'bottom']:
@@ -493,11 +517,11 @@ def analyze_page_deviations(file_bytes, page_num):
                 margin_status[side] = f"MELEWATI BATAS (deviasi {dev_cm:+.2f} cm)"
             else:
                 margin_status[side] = f"AMAN (deviasi {dev_cm:+.2f} cm)"
-        
-        lines = get_lines_with_positions(page)
+
+        all_lines, header_lines, body_lines = get_lines_with_positions(page)
         spacing_deviations = []
-        for i in range(len(lines) - 1):
-            gap = lines[i+1]['y0'] - lines[i]['y0']
+        for i in range(len(body_lines) - 1):
+            gap = body_lines[i+1]['y0'] - body_lines[i]['y0']
             if 0 < gap < 200:
                 if gap > 30:
                     status = "ANTAR PARAGRAF"
@@ -515,16 +539,16 @@ def analyze_page_deviations(file_bytes, page_num):
                     'status': status,
                     'is_ok': is_ok
                 })
-        
-        # JUSTIFY
+
+        # JUSTIFY dari body lines
         left_margin = margin_data['left']
         right_margin = margin_data['right']
         effective_width = width_pt - left_margin - right_margin
         tolerance = 5
-        
+
         justify_count = 0
         total_valid = 0
-        for line in lines:
+        for line in body_lines:
             if len(line['words']) < 3:
                 continue
             total_valid += 1
@@ -532,12 +556,12 @@ def analyze_page_deviations(file_bytes, page_num):
             if (line_width > 0.80 * effective_width and
                 abs(line['x1'] - (width_pt - right_margin)) <= tolerance):
                 justify_count += 1
-        
+
         justify_percentage = (justify_count / total_valid * 100) if total_valid > 0 else 0
         justify_ok = justify_percentage >= 40
-        
+
         doc.close()
-        
+
         return {
             'margin_status': margin_status,
             'margin_deviations_cm': margin_deviations_cm,
@@ -550,7 +574,9 @@ def analyze_page_deviations(file_bytes, page_num):
             'margin_source': margin_data.get('source', 'unknown'),
             'spacing_deviations': spacing_deviations,
             'justify_percentage': round(justify_percentage, 1),
-            'justify_ok': justify_ok
+            'justify_ok': justify_ok,
+            'has_header': len(header_lines) > 0,
+            'header_count': len(header_lines)
         }
     except Exception as e:
         return {'error': str(e)}
@@ -560,22 +586,18 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
     info = get_pdf_detailed_info(file_bytes)
     if 'error' in info:
         return {'error': info['error']}
-    
+
     text = extract_text_from_pdf(file_bytes)
-    
-    # --- Deteksi batas dan pembagian dokumen ---
+
     boundaries = detect_boundaries(text)
     line_to_page = get_page_mapping(file_bytes)
     part_details = split_document_parts(text, line_to_page, boundaries)
-    
-    # Ambil kata utama
+
     main_word_count = part_details.get('main', {}).get('word_count', 0)
-    
-    # Deteksi keberadaan
     bib_detected = 'bibliography' in part_details
     att_detected = 'attachment' in part_details
     any_boundary = bib_detected or att_detected
-    
+
     # === UKURAN KERTAS ===
     a4_w, a4_h = 595.28, 841.89
     paper_details = []
@@ -591,7 +613,7 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         })
         if not ok:
             paper_ok = False
-    
+
     # === MARGIN ===
     target_margin_cm = 3.0
     margin_tolerance_cm = 0.2
@@ -619,17 +641,17 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         })
         if not ok:
             margin_ok = False
-    
-    # === FONT ===
+
+    # === FONT (dari body) ===
     all_fonts = info['all_fonts']
     non_times = {f: c for f, c in all_fonts.items() if not ('Times' in f or 'TimesNewRoman' in f)}
     font_ok = len(non_times) == 0
-    
-    # === UKURAN FONT ===
+
+    # === UKURAN FONT (dari body) ===
     all_sizes = info.get('all_sizes', [])
     avg_font_size = statistics.mean(all_sizes) if all_sizes else 0
     font_size_ok = 11.0 <= avg_font_size <= 13.0 if avg_font_size > 0 else False
-    
+
     # === SPASI ===
     spacing_details = []
     spacing_ok = True
@@ -645,7 +667,7 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         })
         if not is_ok:
             spacing_ok = False
-    
+
     # === JUSTIFY ===
     justify_details = []
     justify_ok = True
@@ -660,12 +682,12 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         })
         if not j['justify']:
             justify_ok = False
-    
+
     # === JUMLAH KATA ===
     words_ok = min_words <= main_word_count <= max_words
-    
+
     all_ok = all([words_ok, paper_ok, margin_ok, font_ok, font_size_ok, spacing_ok, justify_ok])
-    
+
     return {
         'page_count': info['page_count'],
         'total_words': info['total_words'],
@@ -688,6 +710,6 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         'bibliography_detected': bib_detected,
         'attachment_detected': att_detected,
         'boundary_detected': any_boundary,
-        'part_details': part_details,  # detail per bagian
+        'part_details': part_details,
         'all_ok': all_ok
     }
