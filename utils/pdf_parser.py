@@ -24,48 +24,131 @@ def extract_text_from_pdf(file_bytes):
     except Exception as e:
         return f"Error: {e}"
 
-# ========== DETEKSI BATAS DOKUMEN UTAMA (DAFTAR PUSTAKA & LAMPIRAN) ==========
-def find_main_text_boundary(text):
+# ========== DETEKSI BATAS DOKUMEN (DAFTAR PUSTAKA & LAMPIRAN) ==========
+def detect_boundaries(text):
     """
-    Cari indeks baris pertama yang menandakan awal dari bagian yang HARUS DIKECUALIKAN:
-    - Daftar Pustaka / References / Bibliography
-    - Lampiran / Appendix
-    Mengembalikan indeks baris (0-based) atau None jika tidak ditemukan.
-    Mengabaikan jika marker muncul di 20% awal dokumen (untuk menghindari false positive).
+    Deteksi batas awal daftar pustaka dan lampiran.
+    Mengembalikan dictionary dengan indeks baris (0-based) dan marker yang terdeteksi.
     """
     lines = text.split('\n')
     total = len(lines)
     if total == 0:
-        return None
+        return {'bibliography_idx': None, 'attachment_idx': None}
 
-    # Pola regex untuk mendeteksi kata kunci (case-insensitive)
-    # Menangani variasi: "DAFTAR PUSTAKA", "DAFTAR PUSTAKA", "REFERENCES", "BIBLIOGRAPHY",
-    # "LAMPIRAN", "LAMPIRAN", "APPENDIX", "LAMPIRAN", dsb.
-    patterns = [
+    # Pola untuk daftar pustaka (case-insensitive)
+    bib_pattern = re.compile(
         r'(?:^|\s)(daftar\s+pustaka|references|bibliography)(?:$|\s)',
-        r'(?:^|\s)(lampiran|appendix)(?:$|\s)'
-    ]
-    combined_pattern = re.compile('|'.join(patterns), re.IGNORECASE)
+        re.IGNORECASE
+    )
+    # Pola untuk lampiran
+    att_pattern = re.compile(
+        r'(?:^|\s)(lampiran|appendix)(?:$|\s)',
+        re.IGNORECASE
+    )
 
-    # Abaikan 20% awal dokumen (bisa jadi bagian dari konten lain)
+    # Abaikan 20% awal dokumen (menghindari false positive)
     start_index = int(total * 0.2)
+    bib_idx = None
+    att_idx = None
 
     for i, line in enumerate(lines):
         if i < start_index:
             continue
-        # Bersihkan line: hapus penomoran/angka di awal (misal "BAB IV LAMPIRAN" -> "LAMPIRAN")
+        # Bersihkan penomoran/angka di awal (misal "BAB IV LAMPIRAN" -> "LAMPIRAN")
         cleaned = re.sub(r'^[\d\s\.\-]+', '', line).strip()
-        if combined_pattern.search(cleaned):
-            return i
-    return None
+        if bib_idx is None and bib_pattern.search(cleaned):
+            bib_idx = i
+        if att_idx is None and att_pattern.search(cleaned):
+            att_idx = i
+        # Jika keduanya sudah ditemukan, kita tetap lanjutkan? Tidak perlu, karena indeks pertama sudah didapat.
+        # Tapi kita perlu indeks terkecil untuk masing-masing, dan scanning sudah urut dari awal.
+        # Karena kita scanning dari atas, indeks pertama yang ditemukan adalah yang paling awal.
+        # Jadi kita bisa berhenti jika keduanya sudah ditemukan? Tidak, karena mungkin ada yang lebih awal? 
+        # Kita sudah scanning dari awal, jadi indeks pertama adalah yang paling awal.
+        # Kita bisa break jika keduanya ditemukan untuk efisiensi.
+        if bib_idx is not None and att_idx is not None:
+            break
 
-def extract_main_text(text):
-    """Ekstrak teks sebelum batas daftar pustaka atau lampiran (mana yang lebih dulu)."""
-    boundary = find_main_text_boundary(text)
-    if boundary is not None:
-        lines = text.split('\n')
-        return '\n'.join(lines[:boundary])
-    return text
+    return {'bibliography_idx': bib_idx, 'attachment_idx': att_idx}
+
+def get_page_mapping(file_bytes):
+    """Bangun pemetaan indeks baris ke nomor halaman."""
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    line_to_page = []
+    for page_num in range(len(doc)):
+        page_text = doc[page_num].get_text()
+        lines = page_text.split('\n')
+        # Jika halaman kosong, kita tetap tambahkan entri? 
+        # Untuk keperluan pemetaan, jika tidak ada baris, tidak perlu ditambahkan.
+        # Tapi kita perlu menjaga korespondensi indeks dengan baris di full text.
+        # Karena full text adalah gabungan semua halaman dengan newline, 
+        # kita perlu memastikan jumlah baris sama.
+        for _ in lines:
+            line_to_page.append(page_num + 1)
+        # Jika halaman kosong (lines kosong), tetap tambahkan satu entri? 
+        # Sebenarnya jika halaman kosong, tidak ada baris, jadi tidak perlu.
+        # Namun untuk menjaga indeks, kita harus memastikan bahwa line_to_page memiliki
+        # panjang yang sama dengan jumlah baris di full text.
+        # Full text dari extract_text_from_pdf juga menggunakan '\n' antar halaman.
+        # Jadi untuk halaman kosong, tidak ada baris, sehingga line_to_page tetap sesuai.
+    doc.close()
+    return line_to_page
+
+def split_document_parts(text, line_to_page, boundaries):
+    """
+    Bagi dokumen menjadi bagian utama, daftar pustaka, dan lampiran.
+    Kembalikan dictionary detail per bagian.
+    """
+    all_lines = text.split('\n')
+    total_lines = len(all_lines)
+
+    bib_idx = boundaries['bibliography_idx']
+    att_idx = boundaries['attachment_idx']
+
+    # Kumpulkan indeks batas yang valid
+    indices = []
+    if bib_idx is not None:
+        indices.append(('bibliography', bib_idx))
+    if att_idx is not None:
+        indices.append(('attachment', att_idx))
+    indices.sort(key=lambda x: x[1])  # Urutkan berdasarkan indeks baris
+
+    parts = {}
+    if not indices:
+        # Tidak ada batas, semua adalah bagian utama
+        parts['main'] = (0, total_lines)
+    else:
+        # Bagian utama dari awal sampai batas pertama
+        first_idx = indices[0][1]
+        parts['main'] = (0, first_idx)
+        # Bagian-bagian selanjutnya
+        for i, (name, idx) in enumerate(indices):
+            next_idx = indices[i+1][1] if i+1 < len(indices) else total_lines
+            parts[name] = (idx, next_idx)
+
+    # Hitung detail per bagian
+    part_details = {}
+    for name, (start, end) in parts.items():
+        part_lines = all_lines[start:end]
+        part_text = '\n'.join(part_lines)
+        word_count = len(part_text.split())
+        # Ambil halaman yang tercakup
+        pages = set()
+        for i in range(start, end):
+            if i < len(line_to_page):
+                pages.add(line_to_page[i])
+        if pages:
+            page_range = f"{min(pages)}-{max(pages)}"
+        else:
+            page_range = ""
+        part_details[name] = {
+            'word_count': word_count,
+            'page_range': page_range,
+            'line_start': start,
+            'line_end': end
+        }
+
+    return part_details
 
 # ========== GET LINES WITH POSITIONS ==========
 def get_lines_with_positions(page):
@@ -179,13 +262,9 @@ def get_pdf_detailed_info(file_bytes):
             width = page.rect.width
             height = page.rect.height
 
-            # === GET LINES ===
             lines = get_lines_with_positions(page)
-            
-            # === MARGIN ===
             margin_info = get_page_margin(page)
             
-            # === FONT INFO ===
             fonts_on_page = defaultdict(int)
             font_sizes_on_page = []
             for block in page.get_text("dict")["blocks"]:
@@ -204,7 +283,7 @@ def get_pdf_detailed_info(file_bytes):
             word_count = len(page.get_text().split())
             total_words += word_count
             
-            # === SPACING (per baris) ===
+            # === SPACING ===
             all_gaps = []
             gap_details = []
             for i in range(len(lines) - 1):
@@ -306,9 +385,6 @@ def get_pdf_detailed_info(file_bytes):
 
 # ========== RENDER PAGE WITH GUIDELINES ==========
 def render_page_with_guidelines(file_bytes, page_num, dpi=100):
-    """
-    Render halaman dengan garis panduan margin dan spacing.
-    """
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
@@ -327,7 +403,6 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         target_margin_pt = cm_to_pt(3.0)
         margin_px = target_margin_pt * scale
         
-        # Gambar batas margin (merah)
         draw.rectangle(
             [margin_px, margin_px, 
              pix.width - margin_px, pix.height - margin_px],
@@ -487,11 +562,19 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         return {'error': info['error']}
     
     text = extract_text_from_pdf(file_bytes)
-    main_text = extract_main_text(text)  # <-- gunakan fungsi baru
-    main_word_count = len(main_text.split())
     
-    # Deteksi apakah ada batas (daftar pustaka atau lampiran) yang ditemukan
-    boundary_found = find_main_text_boundary(text) is not None
+    # --- Deteksi batas dan pembagian dokumen ---
+    boundaries = detect_boundaries(text)
+    line_to_page = get_page_mapping(file_bytes)
+    part_details = split_document_parts(text, line_to_page, boundaries)
+    
+    # Ambil kata utama
+    main_word_count = part_details.get('main', {}).get('word_count', 0)
+    
+    # Deteksi keberadaan
+    bib_detected = 'bibliography' in part_details
+    att_detected = 'attachment' in part_details
+    any_boundary = bib_detected or att_detected
     
     # === UKURAN KERTAS ===
     a4_w, a4_h = 595.28, 841.89
@@ -602,6 +685,9 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         'justify_details': justify_details,
         'page_data': info['page_data'],
         'metadata': info['metadata'],
-        'bibliography_detected': boundary_found,  # true jika daftar pustaka atau lampiran terdeteksi
+        'bibliography_detected': bib_detected,
+        'attachment_detected': att_detected,
+        'boundary_detected': any_boundary,
+        'part_details': part_details,  # detail per bagian
         'all_ok': all_ok
     }
