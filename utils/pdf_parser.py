@@ -24,53 +24,47 @@ def extract_text_from_pdf(file_bytes):
     except Exception as e:
         return f"Error: {e}"
 
-# ========== DETEKSI BAGIAN YANG DIKECUALIKAN (DAFTAR PUSTAKA & LAMPIRAN) ==========
-def find_excluded_section_start(text):
+# ========== DETEKSI BATAS DOKUMEN UTAMA (DAFTAR PUSTAKA & LAMPIRAN) ==========
+def find_main_text_boundary(text):
     """
-    Cari indeks baris pertama dari bagian yang harus dikecualikan:
-    - Daftar Pustaka / Referensi
+    Cari indeks baris pertama yang menandakan awal dari bagian yang HARUS DIKECUALIKAN:
+    - Daftar Pustaka / References / Bibliography
     - Lampiran / Appendix
     Mengembalikan indeks baris (0-based) atau None jika tidak ditemukan.
+    Mengabaikan jika marker muncul di 20% awal dokumen (untuk menghindari false positive).
     """
-    keywords = [
-        # Daftar Pustaka
-        "DAFTAR PUSTAKA", "REFERENSI", "REFERENCES", "BIBLIOGRAPHY", "PUSTAKA",
-        # Lampiran
-        "LAMPIRAN", "APPENDIX", "ATTACHMENT", "LAMP.", "APP."
-    ]
     lines = text.split('\n')
     total = len(lines)
     if total == 0:
         return None
 
-    # Cari dari atas ke bawah, ambil indeks paling kecil (yang pertama muncul)
-    earliest_idx = None
+    # Pola regex untuk mendeteksi kata kunci (case-insensitive)
+    # Menangani variasi: "DAFTAR PUSTAKA", "DAFTAR PUSTAKA", "REFERENCES", "BIBLIOGRAPHY",
+    # "LAMPIRAN", "LAMPIRAN", "APPENDIX", "LAMPIRAN", dsb.
+    patterns = [
+        r'(?:^|\s)(daftar\s+pustaka|references|bibliography)(?:$|\s)',
+        r'(?:^|\s)(lampiran|appendix)(?:$|\s)'
+    ]
+    combined_pattern = re.compile('|'.join(patterns), re.IGNORECASE)
+
+    # Abaikan 20% awal dokumen (bisa jadi bagian dari konten lain)
+    start_index = int(total * 0.2)
+
     for i, line in enumerate(lines):
-        line_clean = line.strip().upper()
-        if not line_clean:
+        if i < start_index:
             continue
-        for kw in keywords:
-            # Cek apakah keyword ada di baris (case-insensitive)
-            if kw in line_clean:
-                # Hindari false positive: kata "PUSTAKA" mungkin muncul di tengah kalimat
-                # tapi biasanya di header hanya ada kata itu saja atau dengan nomor.
-                # Kita anggap aman karena di laporan akademik header tersebut eksplisit.
-                if earliest_idx is None or i < earliest_idx:
-                    earliest_idx = i
-                break  # cukup satu keyword per baris
+        # Bersihkan line: hapus penomoran/angka di awal (misal "BAB IV LAMPIRAN" -> "LAMPIRAN")
+        cleaned = re.sub(r'^[\d\s\.\-]+', '', line).strip()
+        if combined_pattern.search(cleaned):
+            return i
+    return None
 
-    return earliest_idx
-
-def extract_text_before_excluded_sections(text):
-    """
-    Kembalikan teks sebelum bagian yang dikecualikan (Daftar Pustaka atau Lampiran).
-    Jika tidak ditemukan, kembalikan seluruh teks.
-    """
-    idx = find_excluded_section_start(text)
-    if idx is not None:
+def extract_main_text(text):
+    """Ekstrak teks sebelum batas daftar pustaka atau lampiran (mana yang lebih dulu)."""
+    boundary = find_main_text_boundary(text)
+    if boundary is not None:
         lines = text.split('\n')
-        # Ambil semua baris sebelum idx (tidak termasuk baris header)
-        return '\n'.join(lines[:idx])
+        return '\n'.join(lines[:boundary])
     return text
 
 # ========== GET LINES WITH POSITIONS ==========
@@ -312,6 +306,9 @@ def get_pdf_detailed_info(file_bytes):
 
 # ========== RENDER PAGE WITH GUIDELINES ==========
 def render_page_with_guidelines(file_bytes, page_num, dpi=100):
+    """
+    Render halaman dengan garis panduan margin dan spacing.
+    """
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         if page_num < 1 or page_num > len(doc):
@@ -330,6 +327,7 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
         target_margin_pt = cm_to_pt(3.0)
         margin_px = target_margin_pt * scale
         
+        # Gambar batas margin (merah)
         draw.rectangle(
             [margin_px, margin_px, 
              pix.width - margin_px, pix.height - margin_px],
@@ -353,6 +351,7 @@ def render_page_with_guidelines(file_bytes, page_num, dpi=100):
             if i < len(lines) - 1:
                 gap_actual = lines[i+1]['y0'] - line['y0']
                 ideal_y_px = (line['y0'] + 18) * scale
+                
                 draw.line([(20, ideal_y_px), (pix.width - 20, ideal_y_px)], 
                           fill=(0, 100, 255), width=1)
                 
@@ -442,6 +441,7 @@ def analyze_page_deviations(file_bytes, page_num):
                     'is_ok': is_ok
                 })
         
+        # JUSTIFY
         left_margin = margin_data['left']
         right_margin = margin_data['right']
         effective_width = width_pt - left_margin - right_margin
@@ -487,14 +487,11 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         return {'error': info['error']}
     
     text = extract_text_from_pdf(file_bytes)
-    
-    # === EKSTRAK TEKS UTAMA (SEBELUM DAFTAR PUSTAKA & LAMPIRAN) ===
-    main_text = extract_text_before_excluded_sections(text)
+    main_text = extract_main_text(text)  # <-- gunakan fungsi baru
     main_word_count = len(main_text.split())
     
-    # Deteksi apakah ada bagian yang dikecualikan
-    excluded_start = find_excluded_section_start(text)
-    excluded_detected = excluded_start is not None
+    # Deteksi apakah ada batas (daftar pustaka atau lampiran) yang ditemukan
+    boundary_found = find_main_text_boundary(text) is not None
     
     # === UKURAN KERTAS ===
     a4_w, a4_h = 595.28, 841.89
@@ -605,6 +602,6 @@ def analyze_pdf_format(file_bytes, min_words=2000, max_words=3000):
         'justify_details': justify_details,
         'page_data': info['page_data'],
         'metadata': info['metadata'],
-        'excluded_sections_detected': excluded_detected,
+        'bibliography_detected': boundary_found,  # true jika daftar pustaka atau lampiran terdeteksi
         'all_ok': all_ok
     }
