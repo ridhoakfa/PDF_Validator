@@ -8,7 +8,6 @@ from utils.pdf_parser import (
     pt_to_cm
 )
 
-# ========== KONFIGURASI HALAMAN ==========
 st.set_page_config(
     page_title="Validator Format Dokumen",
     page_icon="📄",
@@ -16,7 +15,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ========== SIDEBAR ==========
 with st.sidebar:
     st.markdown("### 📋 Panduan Singkat")
     st.markdown("""
@@ -26,13 +24,9 @@ with st.sidebar:
     - **Font**: Times New Roman
     - **Ukuran font**: 12 pt
     - **Margin**: 3 cm (atas, bawah, kiri, kanan)
-    - **Jumlah kata**: 2000–3000 **(di luar daftar pustaka dan lampiran)**
+    - **Jumlah kata**: 2000–3000 **(di luar daftar pustaka, lampiran, dan HEADER)**
     - **Perataan**: Justify (rata kanan-kiri)
     - **Spasi**: 1.5 (≈ 18 pt) – gap 6–30 pt dianggap OK
-
-    **Catatan penting:**
-    - Header di 10% atas halaman **DIABAIKAN** dari semua pengecekan.
-    - Footer di 10% bawah halaman **DIABAIKAN** dari semua pengecekan.
 
     **Cara baca visualisasi:**
     - 🟥 **Garis merah** = batas margin 3 cm
@@ -40,8 +34,9 @@ with st.sidebar:
     - 🟩 **Label hijau** = gap OK (6–30 pt)
     - 🟧 **Label oranye** = gap >30 pt (antar paragraf, bukan error)
     - 🟥 **Label merah** = gap <6 pt (terlalu rapat)
+    - 🟨 **Area kuning** = area header (diabaikan dari validasi)
     """)
-    
+
     st.markdown("---")
     st.markdown("""
     **👨‍💻 Dibuat oleh:**  
@@ -50,11 +45,9 @@ with st.sidebar:
     Statistika – Universitas Diponegoro
     """)
 
-# ========== JUDUL UTAMA ==========
 st.title("📄 Validator Format Dokumen Laporan")
 st.markdown("Upload file PDF untuk memeriksa kesesuaian format sesuai standar penulisan akademik.")
 
-# ========== UPLOAD FILE ==========
 uploaded_file = st.file_uploader(
     "📂 Upload dokumen (PDF)",
     type=['pdf'],
@@ -65,19 +58,19 @@ if uploaded_file:
     file_bytes = uploaded_file.read()
     text = extract_text_from_pdf(file_bytes)
     result = analyze_pdf_format(file_bytes, min_words=2000, max_words=3000)
-    
+
     if 'error' in result:
         st.error(f"Error: {result['error']}")
         st.stop()
-    
+
     # ========== RINGKASAN DOKUMEN ==========
     st.subheader("📊 Ringkasan Dokumen")
-    
+
     col_info1, col_info2, col_info3, col_info4, col_info5 = st.columns(5)
     with col_info1:
         st.metric("📄 Halaman", result['page_count'])
     with col_info2:
-        st.metric("📝 Kata (tanpa dafpus & lampiran)", result['main_words'])
+        st.metric("📝 Kata (tanpa dafpus, lampiran, header)", result['main_words'])
     with col_info3:
         st.metric("📏 Ukuran Kertas", "A4 ✅" if result['paper_ok'] else "❌")
     with col_info4:
@@ -90,7 +83,7 @@ if uploaded_file:
             st.metric("📎 Lampiran", "Terdeteksi ✅")
         else:
             st.metric("📎 Lampiran", "Tidak terdeteksi ⚠️")
-    
+
     # ========== DETAIL PEMBAGIAN DOKUMEN ==========
     with st.expander("📊 Detail Pembagian Dokumen (Kata & Halaman)", expanded=False):
         part_details = result.get('part_details', {})
@@ -111,17 +104,17 @@ if uploaded_file:
                 })
             df_parts = pd.DataFrame(data)
             st.dataframe(df_parts, use_container_width=True, hide_index=True)
-            
+
             total_main = part_details.get('main', {}).get('word_count', 0)
             total_bib = part_details.get('bibliography', {}).get('word_count', 0)
             total_att = part_details.get('attachment', {}).get('word_count', 0)
             st.caption(f"**Total kata utama:** {total_main} | **Daftar pustaka:** {total_bib} | **Lampiran:** {total_att}")
         else:
             st.info("Tidak ada deteksi batas dokumen (semua teks dianggap bagian utama).")
-    
+
     # ========== STATUS VALIDASI ==========
     st.subheader("✅ Status Validasi")
-    
+
     status_cols = st.columns(7)
     status_items = [
         ("📝 Kata", "words_ok", "2000-3000"),
@@ -132,13 +125,12 @@ if uploaded_file:
         ("📄 Rata", "justify_ok", "Justify"),
         ("📄 Kertas", "paper_ok", "A4")
     ]
-    
+
     for i, (label, key, target) in enumerate(status_items):
         with status_cols[i]:
             ok = result.get(key, False)
             st.markdown(f"**{label}**  \n: {':white_check_mark:' if ok else ':x:'} {target}")
-    
-    # Tampilkan isu jika ada
+
     if not result['all_ok']:
         st.warning("⚠️ Ada format yang belum sesuai. Periksa detail di bawah.")
         issues = []
@@ -161,24 +153,24 @@ if uploaded_file:
             st.write(f"- {issue}")
     else:
         st.success("🎉 **Semua format sudah sesuai!**")
-    
+
     # ========== VISUALISASI PER HALAMAN ==========
     st.subheader("🖼️ Visualisasi Per Halaman dengan Garis Panduan")
-    
+
     page_options = list(range(1, result['page_count'] + 1))
     selected_page = st.selectbox("Pilih halaman untuk dilihat", page_options, index=0)
-    
+
     img_bytes = render_page_with_guidelines(file_bytes, selected_page, dpi=100)
     if img_bytes:
-        st.image(img_bytes, caption=f"Halaman {selected_page}", use_container_width=True)
+        st.image(img_bytes, caption=f"Halaman {selected_page} (Area kuning = header diabaikan)", use_container_width=True)
     else:
         st.warning("Gagal merender halaman")
-    
+
     # ========== ANALISIS DEVIASI HALAMAN TERPILIH ==========
     deviation = analyze_page_deviations(file_bytes, selected_page)
     if deviation and 'error' not in deviation:
-        col_dev1, col_dev2, col_dev3 = st.columns(3)
-        
+        col_dev1, col_dev2, col_dev3, col_dev4 = st.columns(4)
+
         with col_dev1:
             st.markdown("#### 📏 Margin (3 cm)")
             st.write(f"**Target:** 3.00 cm")
@@ -189,7 +181,7 @@ if uploaded_file:
                 emoji = "✅" if "AMAN" in status else "❌"
                 st.write(f"- {side.capitalize()}: {emoji} {status}")
             st.write(f"**Sumber margin:** {deviation.get('margin_source', 'unknown')}")
-        
+
         with col_dev2:
             st.markdown("#### 📐 Spasi (1.5 / 18 pt)")
             if deviation['spacing_deviations']:
@@ -212,12 +204,20 @@ if uploaded_file:
                     st.write(f"... dan {len(deviation['spacing_deviations']) - 10} baris lainnya")
             else:
                 st.write("✅ Tidak ada data spacing")
-        
+
         with col_dev3:
             st.markdown("#### 📄 Perataan (Justify)")
             st.write(f"**Persentase justify:** {deviation['justify_percentage']}%")
             st.write(f"**Status:** {'✅ OK' if deviation['justify_ok'] else '❌ Tidak justify (minimal 40%)'}")
-    
+
+        with col_dev4:
+            st.markdown("#### 📌 Header")
+            if deviation.get('has_header', False):
+                st.write(f"✅ Terdeteksi {deviation['header_count']} baris header")
+                st.write("Lihat detail di bagian '📌 Detail Header per Halaman' di bawah.")
+            else:
+                st.write("✅ Tidak ada header terdeteksi")
+
     # ========== TABEL DETAIL PER HALAMAN ==========
     with st.expander("📋 Detail Per Halaman (Tabel)", expanded=False):
         rows = []
@@ -237,20 +237,21 @@ if uploaded_file:
                 'Margin Kanan (cm)': f"{mg.get('right', 0):.2f}",
                 'Spasi (pt)': f"{sp:.1f}",
                 'Justify %': f"{justify['percentage']:.1f}%" if justify else "-",
+                'Header': "✅" if p.get('has_header', False) else "❌",
                 'Margin OK': "✅" if margin['ok'] else "❌"
             })
         df = pd.DataFrame(rows)
         st.dataframe(df, use_container_width=True, height=400)
-    
+
     # ========== FONT DETAIL ==========
-    with st.expander("🔤 Detail Font per Halaman", expanded=False):
+    with st.expander("🔤 Detail Font per Halaman (tanpa header)", expanded=False):
         for p in result['page_data']:
             fonts = p['fonts']
             non_times = {f: c for f, c in fonts.items() if not ('Times' in f or 'TimesNewRoman' in f)}
             status = "✅ Semua Times New Roman" if not non_times else f"⚠️ Font non-Times: {', '.join([f'{f} ({c})' for f, c in non_times.items()])}"
             sizes = ', '.join([f"{s:.1f} pt" for s in sorted(p['unique_font_sizes'])]) if p['unique_font_sizes'] else "-"
             st.write(f"**Halaman {p['page']}**: {status}  |  Ukuran: {sizes}")
-    
+
     # ========== MARGIN DETAIL ==========
     with st.expander("📏 Detail Margin (target 3 cm)", expanded=False):
         margin_rows = []
@@ -270,7 +271,7 @@ if uploaded_file:
         st.dataframe(df_margin, use_container_width=True, height=250)
         if not result['margin_ok']:
             st.warning("Beberapa halaman memiliki margin < 3 cm. Periksa tabel.")
-    
+
     # ========== SPASI DETAIL ==========
     with st.expander("📐 Detail Spasi Baris (target 1.5 / ~18 pt)", expanded=False):
         for s in result['spacing_details']:
@@ -289,7 +290,7 @@ if uploaded_file:
             else:
                 st.write("✅ Semua gap OK.")
             st.markdown("---")
-    
+
     # ========== JUSTIFY DETAIL ==========
     with st.expander("📄 Detail Perataan (Justify) per Halaman", expanded=False):
         avg_justify = sum(j['percentage'] for j in result['justify_details']) / len(result['justify_details']) if result['justify_details'] else 0
@@ -308,15 +309,42 @@ if uploaded_file:
         st.dataframe(df_justify, use_container_width=True, height=200)
         if not result['justify_ok']:
             st.warning("Beberapa halaman memiliki persentase justify di bawah 40%. Periksa tabel.")
-    
+
+    # ========== HEADER DETAIL ==========
+    with st.expander("📌 Detail Header per Halaman", expanded=False):
+        st.markdown("""
+        **Header adalah teks di area 10% atas halaman.**
+        - Header **tidak dihitung** dalam jumlah kata, font, ukuran, spacing, maupun justify.
+        - Berikut detail header yang terdeteksi per halaman.
+        """)
+        header_found = False
+        for p in result['page_data']:
+            if p.get('has_header', False):
+                header_found = True
+                st.markdown(f"**Halaman {p['page']}** — {len(p['header_details'])} baris header")
+                header_rows = []
+                for i, h in enumerate(p['header_details'], 1):
+                    header_rows.append({
+                        'Baris ke-': i,
+                        'Teks': h['text'][:60] + ('...' if len(h['text']) > 60 else ''),
+                        'Font': h['font'],
+                        'Ukuran (pt)': h['size'],
+                        'Posisi Y': h['y_pos']
+                    })
+                if header_rows:
+                    df_header = pd.DataFrame(header_rows)
+                    st.dataframe(df_header, use_container_width=True, hide_index=True)
+                st.markdown("---")
+        if not header_found:
+            st.info("Tidak ada header yang terdeteksi pada dokumen ini.")
+
     # ========== FOOTER ==========
     st.markdown("---")
     st.caption("🔍 Validator Format Dokumen – Dibuat oleh Ridho Akbar Fadhilah (24050123130116) | Statistika Universitas Diponegoro")
 
 else:
-    # ========== TAMPILAN AWAL (BELUM UPLOAD) ==========
     st.info("👆 Upload file PDF untuk memulai validasi.")
-    
+
     st.markdown("""
     ### 📝 Kriteria yang Diperiksa
     | Kriteria | Spesifikasi | Toleransi |
@@ -324,11 +352,11 @@ else:
     | **Font** | Times New Roman (semua teks) | - |
     | **Ukuran Font** | 12 pt | ±1 pt |
     | **Margin** | Atas 3, Bawah 3, Kiri 3, Kanan 3 cm | ±0.2 cm |
-    | **Jumlah Kata** | 2000 - 3000 kata **(di luar daftar pustaka & lampiran)** | - |
+    | **Jumlah Kata** | 2000 - 3000 kata **(di luar daftar pustaka, lampiran, dan HEADER)** | - |
     | **Rata** | Rata kanan-kiri (Justify) | ≥40% baris justify |
     | **Spasi** | 1.5 (≈ 18 pt) | ±12 pt (6–30 pt OK) |
     | **Kertas** | A4 | - |
     """)
-    
+
     st.markdown("---")
     st.caption("🔍 Validator Format Dokumen – Dibuat oleh Ridho Akbar Fadhilah (24050123130116) | Statistika Universitas Diponegoro")
